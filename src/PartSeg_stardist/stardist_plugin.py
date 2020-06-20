@@ -10,7 +10,8 @@ from stardist.models.pretrained import get_registered_models
 
 from PartSegCore.algorithm_describe_base import SegmentationProfile, AlgorithmProperty, AlgorithmDescribeBase
 from PartSegCore.channel_class import Channel
-from PartSegCore.segmentation.algorithm_base import SegmentationResult, AdditionalLayerDescription
+from PartSegCore.segmentation.algorithm_base import SegmentationResult, AdditionalLayerDescription, \
+    SegmentationLimitException
 from PartSegCore.segmentation.noise_filtering import noise_filtering_dict
 from PartSegCore.segmentation.segmentation_algorithm import StackAlgorithm
 
@@ -58,9 +59,19 @@ class StardistSegmentation(StackAlgorithm):
 
     @classmethod
     def get_model_list(cls):
-        return list(get_registered_models(StarDist2D)[0])
+        res = list(get_registered_models(StarDist2D)[0])
+        try:
+            res.remove("2D_versatile_he")
+        except:
+            pass
+        return res
+
+    def check_limitations(self):
+        if not self.image.is_2d:
+            raise SegmentationLimitException("only support 2D images")
 
     def calculation_run(self, report_fun: Callable[[str, int], None]) -> SegmentationResult:
+        self.check_limitations()
         denoised =  noise_filtering_dict[self.parameters["noise_filtering"]["name"]].noise_filter(
                 self.image.get_channel(self.parameters["channel"]),
                 self.image.spacing,
@@ -68,8 +79,25 @@ class StardistSegmentation(StackAlgorithm):
             )
         model = self.get_model()
         normalized = normalize(denoised, 1, 99.8, )
-        segmentation, details = model.predict(normalized, axes=self.image.return_order.replace("C", ""))
+        segmentation, details = model.predict_instances(normalized, axes=self.image.return_order.replace("C", ""))
         return SegmentationResult(segmentation, self.get_segmentation_profile(), additional_layers={
             "description": AdditionalLayerDescription(details, layer_type="image"),
             "segmentation": AdditionalLayerDescription(segmentation, layer_type="labels")
         })
+
+
+class StardistSegmentation3D(StardistSegmentation):
+    def check_limitations(self):
+        if self.image.is_2d or self.image.is_time:
+            raise SegmentationLimitException("only support 3D images")
+
+    @classmethod
+    def get_name(cls) -> str:
+        return "StarDist 3D"
+
+    def get_model(self) -> StarDistBase:
+        return StarDist3D.from_pretrained(self.parameters["model"])
+
+    @classmethod
+    def get_model_list(cls):
+        return list(get_registered_models(StarDist3D)[0])
